@@ -1,2 +1,4 @@
 downloads
 .idea/
+.dist/
+.party_downloader.egg-info/
