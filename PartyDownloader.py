@@ -3,8 +3,32 @@ import time
 from tqdm import tqdm
 import os
 from bs4 import BeautifulSoup
-import concurrent.futures
 from urllib.parse import urlparse
+import threading
+
+
+def run_in_parallel(function, args, max_workers=5, sleep_time=.5):
+    def function_wrapper(result_index, *args_wrapper):
+        results[result_index] = function(*args_wrapper)
+
+    results = [None] * len(args)
+    threads = [None] * max_workers
+    res_index = 0
+    while len(args) > 0:
+        for i, thread in enumerate(threads):
+            if thread is None or not thread.is_alive():
+                if len(args) > 0:
+                    args_i = args.pop(0)
+                    threads[i] = threading.Thread(target=function_wrapper, args=(res_index, *args_i))
+                    threads[i].start()
+                    res_index += 1
+                else:
+                    break
+        time.sleep(sleep_time)
+    for i, thread in enumerate(threads):
+        if thread is not None:
+            thread.join()
+    return results
 
 
 class PartyDownloader:
@@ -23,6 +47,10 @@ class PartyDownloader:
         self._links: list = []
         self._base_url: str = ""
         self._model: str = ""
+        # create folder if downloads folder doesn't exist
+        os.makedirs("downloads", exist_ok=True)
+        # change directory to downloads folder
+        os.chdir("downloads")
 
     def _get_number_of_pages(self):
         errs: int = 0
@@ -47,7 +75,6 @@ class PartyDownloader:
                 time.sleep(1)
 
     def _get_coomer_links(self):
-        links = []
         progress_bar = tqdm(total=self._number_of_pages, unit="page")
 
         def process_page(i):
@@ -63,29 +90,23 @@ class PartyDownloader:
                     for a in post_soup.find_all("a", {"class": "post__attachment-link"}):
                         page_links.append(a.get("href"))
                     time.sleep(.1)
+                progress_bar.update(1)
                 return page_links
             except requests.RequestException:
                 return []
 
-        # Process pages and gather links
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            futures = []
-            for i in range(0, self._number_of_pages * 50, 50):
-                future = executor.submit(process_page, i)
-                futures.append(future)
-            for future in concurrent.futures.as_completed(futures):
-                links.extend(future.result())
-                time.sleep(self._request_delay)
-                progress_bar.update(1)
-
+        links = run_in_parallel(process_page, [[i] for i in range(0, self._number_of_pages * 50, 50)],
+                                max_workers=self._max_workers, sleep_time=self._request_delay)
+        links = [l for page_links in links for l in page_links]
         links = [urlparse(l) for l in links]
+
         # if coomer.party.txt exists, check if the links are already there
-        if os.path.exists(f"{self._model}/coomer.party.txt"):
-            with open(f"{self._model}/coomer.party.txt", "r") as f:
+        if os.path.exists(f"{self._model}/.scraped"):
+            with open(f"{self._model}/.scraped", "r") as f:
                 old_links = f.read().split("\n")
             old_links = [urlparse(l) for l in old_links]
             links = list(set(links + old_links))
-        with open(f"{self._model}/coomer.party.txt", "w") as f:
+        with open(f"{self._model}/.scraped", "w") as f:
             f.write("\n".join([l.geturl() for l in links]))
 
         self._links = links
@@ -94,22 +115,20 @@ class PartyDownloader:
         failed = []
 
         def download_link(link, ts=0):
+            content = None
             try:
                 response = self._session.get(link.geturl())
                 response.raise_for_status()
-                return link, response.content
+                content = response.content
             except requests.RequestException as e:
                 # tqdm.write(f"Failed to download {link} due to {e}")
                 # print the error message and return None
                 if ts < 1:
                     time.sleep(self._request_delay)
                     return download_link(link, ts + 1)
-                return link, None
-
-        def update_progress_bar(future):
-            link, content = future.result()
-            if content is None:
-                failed.append(link)
+            if content is not None:
+                with open(os.path.join(self._model, link.path.split("/")[-1]), 'wb') as f:
+                    f.write(content)
             progress_bar.update(1)
 
         # Filter out links that have already been downloaded
@@ -121,27 +140,20 @@ class PartyDownloader:
         links = download_queue
 
         progress_bar = tqdm(total=len(links), desc="Downloading files", unit="files", position=0)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            future_to_link = {executor.submit(download_link, link, 0): link for link in links}
-            for future in concurrent.futures.as_completed(future_to_link):
-                link, content = future.result()
-                if content is not None:
-                    name = os.path.join(self._model, link.path.split("/")[-1])
-                    with open(name, 'wb') as f:
-                        f.write(content)
-                update_progress_bar(future)
-                time.sleep(self._request_delay)
+        run_in_parallel(download_link, [[l] for l in links], max_workers=self._max_workers,
+                        sleep_time=self._request_delay)
 
         if len(failed) > 0:
             if times < 1:
                 print("Retrying failed downloads")
                 return self._download_links(times + 1)
             tqdm.write(f"Failed to download {len(failed)} files")
-            with open(f"{self._model}/coomer.party.failed.txt", "w") as f:
-                f.write("\n".join([l.geturl() for l in failed]))
+        with open(f"{self._model}/.failed", "w") as f:
+            f.write("\n".join([l.geturl() for l in failed]))
 
     def download_coomer_files(self, model, *, full_path=None):
         print(f"Downloading {model}")
+        os.makedirs(model, exist_ok=True)
         self._model = model
 
         if full_path is not None:
@@ -165,6 +177,6 @@ class PartyDownloader:
 
 model = "bustanutters"
 # create folder if it doesn't exist (use the oneliner)
-os.makedirs(model, exist_ok=True)
+
 party_downloader = PartyDownloader()
 party_downloader.download_coomer_files(model)
