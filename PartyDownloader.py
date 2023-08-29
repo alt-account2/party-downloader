@@ -175,8 +175,8 @@ class PartyDownloader:
         self._download_links()
 
 
-model = "bustanutters"
-# create folder if it doesn't exist (use the oneliner)
-
-party_downloader = PartyDownloader()
-party_downloader.download_coomer_files(model)
+# model = "bustanutters"
+# # create folder if it doesn't exist (use the oneliner)
+#
+# party_downloader = PartyDownloader()
+# party_downloader.download_coomer_files(model)
