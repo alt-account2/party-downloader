@@ -175,7 +175,7 @@ class PartyDownloader:
         self._download_links()
 
 
-def main():
+def demo():
     model = input("Enter model name: ")
     party_downloader = PartyDownloader()
     party_downloader.download_coomer_files(model)
