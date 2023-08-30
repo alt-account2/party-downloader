@@ -2,8 +2,8 @@ from setuptools import setup, find_packages
 
 setup(
     name='party-downloader',
-    version='0.0.4',
-    # description='A description of your package',
+    version='0.0.5',
+    description='Simple tool to download files from coomer.party',
     packages=find_packages(),
     install_requires=[
         'requests',

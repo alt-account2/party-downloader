@@ -4,3 +4,4 @@ PartyDownloader/downloads
 dist/*
 party_downloader.egg-info/*
 build/*
+.pypirc
