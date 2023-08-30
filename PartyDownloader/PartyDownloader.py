@@ -32,7 +32,8 @@ def run_in_parallel(function, args, max_workers=5, sleep_time=.5):
 
 
 class PartyDownloader:
-    def __init__(self):
+    def __init__(self, progress_bar=True):
+        self._display_progress_bar = progress_bar
         self._session = requests.Session()
         self._session.headers.update(
             {
@@ -52,8 +53,11 @@ class PartyDownloader:
         # change directory to downloads folder
         os.chdir("downloads")
 
+    def display_progress_bar(self, value: bool):
+        self._display_progress_bar = value
+
     def _get_number_of_pages(self):
-        errs: int = 0
+        errs = 0
         self._number_of_pages = 0
         while True:
             try:
@@ -74,8 +78,9 @@ class PartyDownloader:
                     break
                 time.sleep(1)
 
-    def _get_coomer_links(self):
-        progress_bar = tqdm(total=self._number_of_pages, unit="page")
+    def _get_coomer_links(self, skip_scraping):
+        if self._display_progress_bar:
+            progress_bar = tqdm(total=self._number_of_pages, unit="page")
 
         def process_page(i):
             url = self._base_url + f"?o={i}"
@@ -90,17 +95,19 @@ class PartyDownloader:
                     for a in post_soup.find_all("a", {"class": "post__attachment-link"}):
                         page_links.append(a.get("href"))
                     time.sleep(.1)
-                progress_bar.update(1)
+                if self._display_progress_bar:
+                    progress_bar.update(1)
                 return page_links
             except requests.RequestException:
                 return []
 
-        links = run_in_parallel(process_page, [[i] for i in range(0, self._number_of_pages * 50, 50)],
-                                max_workers=self._max_workers, sleep_time=self._request_delay)
-        links = [l for page_links in links for l in page_links]
-        links = [urlparse(l) for l in links]
+        links = []
+        if not skip_scraping:
+            links = run_in_parallel(process_page, [[i] for i in range(0, self._number_of_pages * 50, 50)],
+                                    max_workers=self._max_workers, sleep_time=self._request_delay)
+            links = [l for page_links in links for l in page_links]
+            links = [urlparse(l) for l in links]
 
-        # if coomer.party.txt exists, check if the links are already there
         if os.path.exists(f"{self._model}/.scraped"):
             with open(f"{self._model}/.scraped", "r") as f:
                 old_links = f.read().split("\n")
@@ -116,20 +123,22 @@ class PartyDownloader:
 
         def download_link(link, ts=0):
             content = None
-            try:
-                response = self._session.get(link.geturl())
-                response.raise_for_status()
-                content = response.content
-            except requests.RequestException as e:
-                # tqdm.write(f"Failed to download {link} due to {e}")
-                # print the error message and return None
-                if ts < 1:
-                    time.sleep(self._request_delay)
-                    return download_link(link, ts + 1)
-            if content is not None:
-                with open(os.path.join(self._model, link.path.split("/")[-1]), 'wb') as f:
-                    f.write(content)
-            progress_bar.update(1)
+            if not os.path.exists(os.path.join(self._model, link.path.split("/")[-1])):
+                try:
+                    response = self._session.get(link.geturl())
+                    response.raise_for_status()
+                    content = response.content
+                except requests.RequestException as e:
+                    # tqdm.write(f"Failed to download {link} due to {e}")
+                    # print the error message and return None
+                    if ts < 1:
+                        time.sleep(self._request_delay)
+                        return download_link(link, ts + 1)
+                if content is not None:
+                    with open(os.path.join(self._model, link.path.split("/")[-1]), 'wb') as f:
+                        f.write(content)
+            if self._display_progress_bar:
+                progress_bar.update(1)
 
         # Filter out links that have already been downloaded
         download_queue = []
@@ -139,7 +148,8 @@ class PartyDownloader:
                 download_queue.append(link)
         links = download_queue
 
-        progress_bar = tqdm(total=len(links), desc="Downloading files", unit="files", position=0)
+        if self._display_progress_bar:
+            progress_bar = tqdm(total=len(links), desc="Downloading files", unit="files", position=0)
         run_in_parallel(download_link, [[l] for l in links], max_workers=self._max_workers,
                         sleep_time=self._request_delay)
 
@@ -151,7 +161,7 @@ class PartyDownloader:
         with open(f"{self._model}/.failed", "w") as f:
             f.write("\n".join([l.geturl() for l in failed]))
 
-    def download_coomer_files(self, model, *, full_path=None):
+    def download_coomer_files(self, model, *, full_path=None, skip_scraping=False):
         print(f"Downloading {model}")
         os.makedirs(model, exist_ok=True)
         self._model = model
@@ -169,13 +179,18 @@ class PartyDownloader:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36"
             }
         )
-
-        self._get_number_of_pages()
-        self._get_coomer_links()
+        if not skip_scraping:
+            self._get_number_of_pages()
+        self._get_coomer_links(skip_scraping)
         self._download_links()
 
 
 def demo():
     model = input("Enter model name: ")
+    skip_scraping = input("Skip scraping? (y/n): ").lower() == "y"
     party_downloader = PartyDownloader()
-    party_downloader.download_coomer_files(model)
+    party_downloader.download_coomer_files(model, skip_scraping=skip_scraping)
+
+
+if __name__ == "__main__":
+    demo()
